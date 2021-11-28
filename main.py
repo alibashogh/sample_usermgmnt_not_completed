@@ -1,6 +1,9 @@
-from fastapi import FastAPI, Path
+from fastapi import FastAPI, Path, Query
+from fastapi_pagination import Page, paginate, add_pagination
 from pymongo import MongoClient
 from pprint import pprint
+from pydantic import BaseModel
+from typing import Optional
 
 app = FastAPI()
 
@@ -22,6 +25,31 @@ users = db.users
 # user_id = users.insert_one(user).inserted_id
 
 
+def check_national_code(nat_code):
+    national_code = str(nat_code)
+    while len(national_code) < 10:
+        national_code = '0' + national_code
+    national_list = []
+    for i in national_code:
+        national_list.append(int(i))
+    national_list.reverse()
+    sign_digit = national_list.pop(0)
+    multiple_list = []
+    counter = 2
+    for digit in national_list:
+        multiple_list.append(digit * counter)
+        counter += 1
+    sum_multiple_list = sum(multiple_list)
+    num = sum_multiple_list % 11
+
+    if num < 2 and num == sign_digit:
+        return {'national_id': 'valid'}
+    elif num < 2 and num != sign_digit:
+        return {'national_id': 'invalid'}
+    else:
+        return {'national_id': 'valid'}
+
+
 samples = []
 for user in cursor:
     user_id = user['_id']
@@ -29,12 +57,33 @@ for user in cursor:
     samples.append(user)
 
 
-@app.get('/')
+class UserIn(BaseModel):
+    national_id: int
+    username: str
+    password: str
+    name: str
+    last_name: str
+    email: str
+    phone: str
+
+
+class UserOut(BaseModel):
+    national_id: int
+    username: str
+    name: str
+    last_name: str
+    email: str
+    phone: str
+
+
+@app.get('/', response_model=Page[UserOut])
 async def root():
-    return samples
+    return paginate(samples)
+
+add_pagination(app)
 
 
-@app.get('/user/{username}')
+@app.get('/usr/{username}')
 async def get_specific_user_by_username(username: str):
     return_value = {}
     for item in samples:
@@ -48,36 +97,46 @@ async def get_specific_user_by_username(username: str):
                 'email': item['email'],
                 'phone': item['phone']
             }
-        else:
-            return_value = {"request_failed": "No user with this username"}
-            return return_value
     return return_value
 
 
-@app.get('/user/conn/{national_id}')
-async def get_connections_by_national_id(
-        national_id: int = Path(..., title='communication to user', gt=0)
-
-):
+@app.get('/conn_usr/{national_id}')
+async def get_connections_by_national_id(national_id):
     return_value = {}
     for item in samples:
-        if item['national_id'] == national_id:
+        if item['national_id'] == int(national_id):
             return_value = {
                 'phone': item['phone'],
                 'email': item['email']
             }
-        else:
-            return_value = {"request_failed": "No user with this national_id"}
-            return return_value
     return return_value
 
 
-@app.get('/user/del/{national_id}&{sign}')
-async def operation_on_users(national_id: int, sign: str):
-    if sign.upper() == 'D':
-        delete_query = {'national_id': national_id}
-        collection.delete_one(delete_query)
-        return {'delete_operation': 'succeed'}
-    # elif sign.upper() == 'I':
+@app.get('/user_op/del/{national_id}')
+async def delete_user(national_id: int):
+    delete_query = {'national_id': national_id}
+    collection.delete_one(delete_query)
+    return {'delete_operation': 'succeed'}
 
 
+@app.post('/user_op/ins/', response_model=UserOut)
+async def insert_user(user_in: UserIn):
+    print(user_in )
+    query = {
+        "national_id": user_in.national_id,
+        "username": user_in.username,
+        "password": user_in.password,
+        "name": user_in.name,
+        "last_name": user_in.last_name,
+        "email": user_in.email,
+        "phone": user_in.phone
+    }
+    collection.insert_one(query)
+    return user_in
+
+
+@app.get('/user/validation/{username}')
+async def check_validity_national_code(username):
+    for item in samples:
+        if item['username'] == username:
+            return check_national_code(item['national_id'])
